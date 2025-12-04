@@ -1,9 +1,9 @@
 package com.orovia.payment.service;
 
-import com.orovia.payment.domain.event.PaymentCompletedEvent;
+import com.orovia.payment.domain.event.PaymentAuthorizedEvent;
+import com.orovia.payment.domain.event.PaymentOrderCreatedEvent;
 import com.orovia.payment.domain.model.Booking;
 import com.orovia.payment.domain.model.BookingStatus;
-import com.orovia.payment.domain.model.LedgerReferenceType;
 import com.orovia.payment.domain.model.PaymentMethod;
 import com.orovia.payment.domain.model.PaymentOrder;
 import com.orovia.payment.domain.model.PaymentOrderStatus;
@@ -16,17 +16,17 @@ import com.orovia.payment.exception.ResourceNotFoundException;
 import com.orovia.payment.integration.PaymentGatewayClient;
 import com.orovia.payment.integration.PaymentGatewayRouter;
 import com.orovia.payment.mapper.PaymentMapper;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.BookingRepository;
 import com.orovia.payment.repository.PaymentOrderRepository;
 import com.orovia.payment.repository.PaymentTransactionRepository;
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,9 +43,8 @@ public class PaymentService {
     private final BookingRepository bookingRepository;
     private final PaymentGatewayRouter paymentGatewayRouter;
     private final PaymentTransactionRepository paymentTransactionRepository;
-    private final LedgerService ledgerService;
-    private final ApplicationEventPublisher eventPublisher;
-    private final SettlementService settlementService;
+    private final DomainEventPublisher eventPublisher;
+    private final IdempotencyService idempotencyService;
 
     /**
      * Creates a payment order using idempotency.
@@ -67,6 +66,12 @@ public class PaymentService {
             return PaymentMapper.toResponse(existingOrder.get(), existingOrder.get().getReturnUrl());
         }
 
+        if (!idempotencyService.acquire("payment:create:" + idempotencyKey, Duration.ofMinutes(10))) {
+            log.info("Create payment order skipped due to idempotency key {}", idempotencyKey);
+            return existingOrder.map(order -> PaymentMapper.toResponse(order, order.getReturnUrl()))
+                    .orElseThrow(() -> new BusinessException("IDEMPOTENT", "Duplicate create request"));
+        }
+
         PaymentOrder paymentOrder = PaymentMapper.toEntity(request);
         paymentOrder.setIdempotencyKey(idempotencyKey);
         PaymentGatewayClient client = paymentGatewayRouter.resolve(paymentOrder.getPaymentMethod());
@@ -75,6 +80,9 @@ public class PaymentService {
         paymentOrder.setStatus(PaymentOrderStatus.PENDING);
         paymentOrder.setUpdatedAt(OffsetDateTime.now());
         PaymentOrder persisted = paymentOrderRepository.save(paymentOrder);
+        eventPublisher.publish("payments.created", new PaymentOrderCreatedEvent(persisted.getId(),
+                persisted.getBookingId(), persisted.getAmount(), persisted.getCurrency(),
+                persisted.getPaymentMethod().name()));
         return PaymentMapper.toResponse(persisted, gatewayResponse.get("paymentUrl"));
     }
 
@@ -88,6 +96,13 @@ public class PaymentService {
      */
     @Transactional
     public PaymentOrder handleWebhook(String provider, WebhookNotification notification, String rawBody) {
+        if (!idempotencyService.acquire("payment:webhook:" + provider + ":" + notification.getOrderId() + ":" +
+                notification.getPaymentId(), Duration.ofMinutes(5))) {
+            log.info("Webhook deduplicated for provider {} order {}", provider, notification.getOrderId());
+            return paymentOrderRepository.findByExternalPgOrderId(notification.getOrderId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Payment order not found"));
+        }
+
         PaymentOrder order = paymentOrderRepository.findByExternalPgOrderId(notification.getOrderId())
                 .orElseThrow(() -> new ResourceNotFoundException("Payment order not found"));
 
@@ -123,12 +138,8 @@ public class PaymentService {
                 booking.setUpdatedAt(OffsetDateTime.now());
                 bookingRepository.save(booking);
             });
-            ledgerService.record(LedgerReferenceType.PAYMENT, order.getId(), "customer:" + order.getBookingId(),
-                    "orovia:platform", order.getAmount(), order.getCurrency(), "Payment captured");
-            ledgerService.record(LedgerReferenceType.PAYMENT, order.getId(), "orovia:platform",
-                    "hotel:" + order.getBookingId(), order.getAmount(), order.getCurrency(), "Hotel payable");
-            settlementService.applySettlementSplit(order);
-            eventPublisher.publishEvent(new PaymentCompletedEvent(order.getId(), order.getBookingId(), order.getCurrency()));
+            eventPublisher.publish("payments.authorized", new PaymentAuthorizedEvent(order.getId(), order.getBookingId(),
+                    order.getAmount(), order.getCurrency(), order.getPaymentMethod().name()));
         } else {
             order.setStatus(PaymentOrderStatus.FAILED);
         }

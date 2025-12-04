@@ -10,6 +10,7 @@ import com.orovia.payment.domain.model.BookingStatus;
 import com.orovia.payment.domain.model.PaymentMethod;
 import com.orovia.payment.domain.model.PaymentOrder;
 import com.orovia.payment.dto.PaymentOrderRequest;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.integration.PaymentGatewayClient;
 import com.orovia.payment.integration.PaymentGatewayRouter;
 import com.orovia.payment.repository.BookingRepository;
@@ -25,7 +26,6 @@ import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
-import org.springframework.context.ApplicationEventPublisher;
 
 @RunWith(MockitoJUnitRunner.class)
 public class PaymentServiceTest {
@@ -39,13 +39,11 @@ public class PaymentServiceTest {
     @Mock
     private PaymentTransactionRepository paymentTransactionRepository;
     @Mock
-    private LedgerService ledgerService;
-    @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private DomainEventPublisher eventPublisher;
     @Mock
     private PaymentGatewayClient paymentGatewayClient;
     @Mock
-    private SettlementService settlementService;
+    private IdempotencyService idempotencyService;
 
     @InjectMocks
     private PaymentService paymentService;
@@ -60,6 +58,7 @@ public class PaymentServiceTest {
         when(paymentGatewayRouter.resolve(PaymentMethod.CARD)).thenReturn(paymentGatewayClient);
         when(paymentGatewayClient.createOrder(any(PaymentOrder.class)))
                 .thenReturn(Map.of("externalOrderId", "ext-1", "paymentUrl", "https://pay"));
+        when(idempotencyService.acquire(any(), any())).thenReturn(true);
         when(paymentOrderRepository.save(any(PaymentOrder.class))).thenAnswer(invocation -> {
             PaymentOrder po = invocation.getArgument(0);
             po.setId(10L);

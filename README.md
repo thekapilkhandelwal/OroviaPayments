@@ -97,6 +97,35 @@ Flyway migrations are located in `src/main/resources/db/migration` and will boot
 - Adjust commission logic inside `SettlementService.applySettlementSplit`.
 - Plug authentication/authorization by extending `SecurityConfig`.
 
+## Planet-Scale Architecture
+
+- **Service contexts**: payment-orchestrator (order creation), payment-callback (webhooks), refund, ledger, settlement, and reconciliation layers can be deployed independently while reusing shared contracts.
+- **Event transport**: domain events (`payments.created`, `payments.authorized`) flow over Kafka with an in-memory bus fallback for local development. Consumers update ledger and settlement state without coupling to the synchronous payment API.
+- **Sharding & IDs**: entities accept externally generated IDs (Snowflake/ULID-ready) to avoid database hot spots; shard routing can fan out booking or hotel scoped data to per-region datasources.
+- **Caches & read models**: Redis-backed idempotency and rate limiting guard high-RPS paths; read replicas can be configured per shard for GET-heavy endpoints.
+- **Resiliency & limits**: token-bucket rate limits and circuit breakers (Resilience4j) should wrap gateway/settlement clients with backoff and bulkheads. Configuration toggles live under `eventing.*`, `idempotency.*`, and `ratelimit.*` namespaces.
+- **Mock vs. real infra**: set `eventing.kafka.enabled=true` to publish through Kafka; keep `false` to rely on the in-memory bus. Redis settings under `spring.redis.*` power idempotency keys.
+
+### Text flow diagrams
+
+```
+Client -> payment-orchestrator -> PaymentOrderCreatedEvent -> payment-callback -> PaymentAuthorizedEvent -> ledger -> settlement
+```
+
+```
+Gateway webhook -> payment-callback (idempotent) -> PaymentAuthorizedEvent -> ledger updates -> settlement accrual -> payout jobs
+```
+
+### Key configuration
+
+| Property | Purpose |
+| --- | --- |
+| `eventing.kafka.enabled` | Switch Kafka publisher on/off |
+| `eventing.kafka.bootstrap-servers` | Kafka brokers for domain events |
+| `spring.redis.*` | Backing store for idempotency keys |
+| `ratelimit.*` | Token-bucket sizing per endpoint |
+| `shards.*` | Future shard datasource mapping for hotel/booking routing |
+
 ## Security & Compliance Notes
 - No raw card data stored; relies on gateway tokens/URLs.
 - HMAC verification stubs show where to secure webhooks.

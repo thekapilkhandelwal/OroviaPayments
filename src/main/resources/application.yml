@@ -30,6 +30,10 @@ payment:
   gateway:
     mock:
       hmacSecret: mock-secret
+eventing:
+  kafka:
+    enabled: false
+    bootstrap-servers: localhost:9092
 
 ---
 spring:

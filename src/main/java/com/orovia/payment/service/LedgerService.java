@@ -1,8 +1,11 @@
 package com.orovia.payment.service;
 
+import com.orovia.payment.domain.event.LedgerUpdatedEvent;
 import com.orovia.payment.domain.model.LedgerEntry;
 import com.orovia.payment.domain.model.LedgerReferenceType;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.LedgerEntryRepository;
+import com.orovia.payment.shared.id.IdGenerator;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -18,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class LedgerService {
 
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final IdGenerator idGenerator;
+    private final DomainEventPublisher eventPublisher;
 
     /**
      * Persist a ledger entry.
@@ -35,6 +40,7 @@ public class LedgerService {
     public LedgerEntry record(LedgerReferenceType referenceType, Long referenceId, String debitAccount,
                               String creditAccount, BigDecimal amount, String currency, String narration) {
         LedgerEntry entry = LedgerEntry.builder()
+                .id(idGenerator.nextId())
                 .referenceType(referenceType)
                 .referenceId(referenceId)
                 .debitAccount(debitAccount)
@@ -44,7 +50,10 @@ public class LedgerService {
                 .narration(narration)
                 .createdAt(OffsetDateTime.now())
                 .build();
-        return ledgerEntryRepository.save(entry);
+        LedgerEntry saved = ledgerEntryRepository.save(entry);
+        eventPublisher.publish("ledger.updated", new LedgerUpdatedEvent(saved.getId(), saved.getReferenceId(),
+                saved.getReferenceType().name(), saved.getAmount(), saved.getCurrency()));
+        return saved;
     }
 
     /**

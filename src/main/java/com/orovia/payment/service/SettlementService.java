@@ -1,12 +1,15 @@
 package com.orovia.payment.service;
 
+import com.orovia.payment.domain.event.SettlementCreatedEvent;
 import com.orovia.payment.domain.model.HotelAccount;
 import com.orovia.payment.domain.model.LedgerReferenceType;
 import com.orovia.payment.domain.model.PaymentOrder;
 import com.orovia.payment.domain.model.Settlement;
 import com.orovia.payment.domain.model.SettlementStatus;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.HotelAccountRepository;
 import com.orovia.payment.repository.SettlementRepository;
+import com.orovia.payment.shared.id.IdGenerator;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -28,6 +31,8 @@ public class SettlementService {
     private final SettlementRepository settlementRepository;
     private final HotelAccountRepository hotelAccountRepository;
     private final LedgerService ledgerService;
+    private final DomainEventPublisher eventPublisher;
+    private final IdGenerator idGenerator;
 
     /**
      * Calculates commission and updates hotel balance for a successful payment.
@@ -60,6 +65,7 @@ public class SettlementService {
                 .filter(acc -> acc.getPayableBalance().compareTo(BigDecimal.ZERO) > 0)
                 .map(acc -> {
                     Settlement settlement = Settlement.builder()
+                            .id(idGenerator.nextId())
                             .hotelId(acc.getHotelId())
                             .amount(acc.getPayableBalance())
                             .status(SettlementStatus.PENDING)
@@ -68,7 +74,10 @@ public class SettlementService {
                             .build();
                     acc.setPayableBalance(BigDecimal.ZERO);
                     hotelAccountRepository.save(acc);
-                    return settlementRepository.save(settlement);
+                    Settlement saved = settlementRepository.save(settlement);
+                    eventPublisher.publish("settlements.created", new SettlementCreatedEvent(saved.getId(),
+                            saved.getHotelId(), saved.getAmount(), "USD"));
+                    return saved;
                 })
                 .toList();
     }

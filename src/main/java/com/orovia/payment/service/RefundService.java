@@ -1,5 +1,7 @@
 package com.orovia.payment.service;
 
+import com.orovia.payment.domain.event.RefundCompletedEvent;
+import com.orovia.payment.domain.event.RefundCreatedEvent;
 import com.orovia.payment.domain.model.LedgerReferenceType;
 import com.orovia.payment.domain.model.PaymentOrder;
 import com.orovia.payment.domain.model.PaymentOrderStatus;
@@ -12,8 +14,10 @@ import com.orovia.payment.exception.ResourceNotFoundException;
 import com.orovia.payment.integration.PaymentGatewayClient;
 import com.orovia.payment.integration.PaymentGatewayRouter;
 import com.orovia.payment.mapper.RefundMapper;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.PaymentOrderRepository;
 import com.orovia.payment.repository.RefundRepository;
+import com.orovia.payment.shared.id.IdGenerator;
 import java.time.OffsetDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +35,8 @@ public class RefundService {
     private final PaymentOrderRepository paymentOrderRepository;
     private final PaymentGatewayRouter paymentGatewayRouter;
     private final LedgerService ledgerService;
+    private final DomainEventPublisher eventPublisher;
+    private final IdGenerator idGenerator;
 
     /**
      * Issue a refund for a payment order.
@@ -51,6 +57,7 @@ public class RefundService {
         }
 
         Refund refund = Refund.builder()
+                .id(idGenerator.nextId())
                 .paymentOrderId(paymentOrderId)
                 .amount(request.getAmount())
                 .reason(request.getReason())
@@ -59,6 +66,8 @@ public class RefundService {
                 .updatedAt(OffsetDateTime.now())
                 .build();
         Refund saved = refundRepository.save(refund);
+        eventPublisher.publish("refunds.created", new RefundCreatedEvent(saved.getId(), paymentOrderId,
+                saved.getAmount(), paymentOrder.getCurrency()));
 
         PaymentGatewayClient client = paymentGatewayRouter.resolve(paymentOrder.getPaymentMethod());
         String externalRefundId = client.refundPayment(paymentOrder.getExternalPgPaymentId(), request.getAmount());
@@ -66,6 +75,8 @@ public class RefundService {
         saved.setStatus(RefundStatus.SUCCESS);
         saved.setUpdatedAt(OffsetDateTime.now());
         refundRepository.save(saved);
+        eventPublisher.publish("refunds.completed", new RefundCompletedEvent(saved.getId(), paymentOrderId,
+                saved.getAmount(), paymentOrder.getCurrency(), saved.getStatus().name()));
 
         ledgerService.record(LedgerReferenceType.REFUND, paymentOrderId, "orovia:platform",
                 "customer:" + paymentOrder.getBookingId(), request.getAmount(), paymentOrder.getCurrency(), "Refund processed");

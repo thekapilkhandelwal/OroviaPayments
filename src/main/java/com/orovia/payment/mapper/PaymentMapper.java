@@ -19,8 +19,9 @@ public class PaymentMapper {
      * @param request incoming create request
      * @return new payment order instance
      */
-    public static PaymentOrder toEntity(PaymentOrderRequest request) {
+    public static PaymentOrder toEntity(PaymentOrderRequest request, long id) {
         return PaymentOrder.builder()
+                .id(id)
                 .bookingId(request.getBookingId())
                 .amount(request.getAmount())
                 .currency(request.getCurrency())

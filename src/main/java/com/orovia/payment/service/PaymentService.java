@@ -20,6 +20,11 @@ import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.BookingRepository;
 import com.orovia.payment.repository.PaymentOrderRepository;
 import com.orovia.payment.repository.PaymentTransactionRepository;
+import com.orovia.payment.shared.cache.CacheService;
+import com.orovia.payment.shared.config.ScalingProperties;
+import com.orovia.payment.shared.id.IdGenerator;
+import com.orovia.payment.shared.ratelimit.RateLimiterService;
+import com.orovia.payment.shared.shard.ShardRoutingService;
 import java.time.OffsetDateTime;
 import java.time.Duration;
 import java.util.Map;
@@ -45,6 +50,11 @@ public class PaymentService {
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final DomainEventPublisher eventPublisher;
     private final IdempotencyService idempotencyService;
+    private final IdGenerator idGenerator;
+    private final RateLimiterService rateLimiterService;
+    private final CacheService cacheService;
+    private final ScalingProperties scalingProperties;
+    private final ShardRoutingService shardRoutingService;
 
     /**
      * Creates a payment order using idempotency.
@@ -54,6 +64,9 @@ public class PaymentService {
      */
     @Transactional
     public PaymentOrderResponse createPaymentOrder(PaymentOrderRequest request) {
+        if (!rateLimiterService.tryConsume("api:create-payment")) {
+            throw new BusinessException("RATE_LIMITED", "Payment order creation throttled");
+        }
         Booking booking = bookingRepository.findById(request.getBookingId())
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
         if (booking.getStatus() == BookingStatus.CANCELLED) {
@@ -72,8 +85,10 @@ public class PaymentService {
                     .orElseThrow(() -> new BusinessException("IDEMPOTENT", "Duplicate create request"));
         }
 
-        PaymentOrder paymentOrder = PaymentMapper.toEntity(request);
+        long paymentId = idGenerator.nextId();
+        PaymentOrder paymentOrder = PaymentMapper.toEntity(request, paymentId);
         paymentOrder.setIdempotencyKey(idempotencyKey);
+        shardRoutingService.resolveShard(String.valueOf(paymentOrder.getBookingId()));
         PaymentGatewayClient client = paymentGatewayRouter.resolve(paymentOrder.getPaymentMethod());
         Map<String, String> gatewayResponse = client.createOrder(paymentOrder);
         paymentOrder.setExternalPgOrderId(gatewayResponse.get("externalOrderId"));
@@ -83,6 +98,8 @@ public class PaymentService {
         eventPublisher.publish("payments.created", new PaymentOrderCreatedEvent(persisted.getId(),
                 persisted.getBookingId(), persisted.getAmount(), persisted.getCurrency(),
                 persisted.getPaymentMethod().name()));
+        cacheService.put(cacheKey(paymentOrder.getId()), PaymentMapper.toResponse(persisted, gatewayResponse.get("paymentUrl")),
+                scalingProperties.getCache().getStatusTtlSeconds());
         return PaymentMapper.toResponse(persisted, gatewayResponse.get("paymentUrl"));
     }
 
@@ -96,6 +113,9 @@ public class PaymentService {
      */
     @Transactional
     public PaymentOrder handleWebhook(String provider, WebhookNotification notification, String rawBody) {
+        if (!rateLimiterService.tryConsume("webhook:" + provider)) {
+            throw new BusinessException("RATE_LIMITED", "Webhook flow throttled");
+        }
         if (!idempotencyService.acquire("payment:webhook:" + provider + ":" + notification.getOrderId() + ":" +
                 notification.getPaymentId(), Duration.ofMinutes(5))) {
             log.info("Webhook deduplicated for provider {} order {}", provider, notification.getOrderId());
@@ -118,6 +138,7 @@ public class PaymentService {
 
         boolean success = "SUCCESS".equalsIgnoreCase(notification.getStatus());
         PaymentTransaction txn = PaymentTransaction.builder()
+                .id(idGenerator.nextId())
                 .paymentOrderId(order.getId())
                 .amount(order.getAmount())
                 .currency(order.getCurrency())
@@ -143,7 +164,10 @@ public class PaymentService {
         } else {
             order.setStatus(PaymentOrderStatus.FAILED);
         }
-        return paymentOrderRepository.save(order);
+        PaymentOrder saved = paymentOrderRepository.save(order);
+        cacheService.put(cacheKey(order.getId()), PaymentMapper.toResponse(saved, null),
+                scalingProperties.getCache().getStatusTtlSeconds());
+        return saved;
     }
 
     /**
@@ -154,7 +178,14 @@ public class PaymentService {
      */
     @Transactional(readOnly = true)
     public PaymentOrder getPaymentOrder(Long id) {
-        return paymentOrderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Payment order not found"));
+        return cacheService.get(cacheKey(id), PaymentOrderResponse.class)
+                .map(response -> paymentOrderRepository.findById(response.getId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Payment order not found")))
+                .orElseGet(() -> paymentOrderRepository.findById(id)
+                        .orElseThrow(() -> new ResourceNotFoundException("Payment order not found")));
+    }
+
+    private String cacheKey(Long id) {
+        return "payment:status:" + id;
     }
 }

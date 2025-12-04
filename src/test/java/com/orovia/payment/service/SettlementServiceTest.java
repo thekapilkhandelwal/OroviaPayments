@@ -7,8 +7,10 @@ import static org.mockito.Mockito.when;
 import com.orovia.payment.domain.model.HotelAccount;
 import com.orovia.payment.domain.model.PaymentMethod;
 import com.orovia.payment.domain.model.PaymentOrder;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.repository.HotelAccountRepository;
 import com.orovia.payment.repository.SettlementRepository;
+import com.orovia.payment.shared.id.IdGenerator;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
@@ -29,6 +31,10 @@ public class SettlementServiceTest {
     private HotelAccountRepository hotelAccountRepository;
     @Mock
     private LedgerService ledgerService;
+    @Mock
+    private DomainEventPublisher eventPublisher;
+    @Mock
+    private IdGenerator idGenerator;
 
     @InjectMocks
     private SettlementService settlementService;

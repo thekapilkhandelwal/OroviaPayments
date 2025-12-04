@@ -9,10 +9,12 @@ import com.orovia.payment.domain.model.PaymentMethod;
 import com.orovia.payment.domain.model.PaymentOrder;
 import com.orovia.payment.domain.model.PaymentOrderStatus;
 import com.orovia.payment.dto.RefundRequest;
+import com.orovia.payment.event.DomainEventPublisher;
 import com.orovia.payment.integration.PaymentGatewayClient;
 import com.orovia.payment.integration.PaymentGatewayRouter;
 import com.orovia.payment.repository.PaymentOrderRepository;
 import com.orovia.payment.repository.RefundRepository;
+import com.orovia.payment.shared.id.IdGenerator;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Optional;
@@ -36,6 +38,10 @@ public class RefundServiceTest {
     private PaymentGatewayClient paymentGatewayClient;
     @Mock
     private LedgerService ledgerService;
+    @Mock
+    private DomainEventPublisher eventPublisher;
+    @Mock
+    private IdGenerator idGenerator;
 
     @InjectMocks
     private RefundService refundService;
@@ -57,6 +63,7 @@ public class RefundServiceTest {
         when(paymentOrderRepository.findById(2L)).thenReturn(Optional.of(paymentOrder));
         when(paymentGatewayRouter.resolve(PaymentMethod.CARD)).thenReturn(paymentGatewayClient);
         when(paymentGatewayClient.refundPayment(any(String.class), any(BigDecimal.class))).thenReturn("refund-1");
+        when(idGenerator.nextId()).thenReturn(21L);
         when(refundRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 

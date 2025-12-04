@@ -16,6 +16,11 @@ spring:
   redis:
     host: localhost
     port: 6379
+  cache:
+    type: redis
+  threads:
+    virtual:
+      enabled: true
   profiles:
     active: dev
   jackson:
@@ -26,14 +31,48 @@ logging:
     root: INFO
     com.orovia.payment: DEBUG
 
+otel:
+  exporter:
+    logging:
+      enabled: true
+
 payment:
   gateway:
     mock:
       hmacSecret: mock-secret
+  rate-limit:
+    create-order-permit-per-second: 200
+    webhook-permit-per-second: 500
+  cache:
+    status-ttl-seconds: 60
+  shards:
+    total: 8
+    region-hint: us-east
 eventing:
   kafka:
     enabled: false
     bootstrap-servers: localhost:9092
+    payment-topic: payments.v1
+    refund-topic: refunds.v1
+    ledger-topic: ledger.v1
+    settlement-topic: settlements.v1
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      payment-gateway:
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+  retry:
+    instances:
+      payment-gateway:
+        maxRetryAttempts: 3
+        waitDuration: 500ms
+        exponentialBackoffMultiplier: 1.5
+        enableExponentialBackoff: true
 
 ---
 spring:

@@ -23,7 +23,6 @@ import lombok.NoArgsConstructor;
 public class PaymentOrder {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     private Long bookingId;

@@ -20,7 +20,6 @@ import lombok.NoArgsConstructor;
 public class Settlement {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     private Long hotelId;

@@ -20,7 +20,6 @@ import lombok.NoArgsConstructor;
 public class Refund {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     private Long paymentOrderId;

@@ -16,6 +16,11 @@ import com.orovia.payment.integration.PaymentGatewayRouter;
 import com.orovia.payment.repository.BookingRepository;
 import com.orovia.payment.repository.PaymentOrderRepository;
 import com.orovia.payment.repository.PaymentTransactionRepository;
+import com.orovia.payment.shared.cache.CacheService;
+import com.orovia.payment.shared.config.ScalingProperties;
+import com.orovia.payment.shared.id.IdGenerator;
+import com.orovia.payment.shared.ratelimit.RateLimiterService;
+import com.orovia.payment.shared.shard.ShardRoutingService;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -44,6 +49,16 @@ public class PaymentServiceTest {
     private PaymentGatewayClient paymentGatewayClient;
     @Mock
     private IdempotencyService idempotencyService;
+    @Mock
+    private IdGenerator idGenerator;
+    @Mock
+    private RateLimiterService rateLimiterService;
+    @Mock
+    private CacheService cacheService;
+    @Mock
+    private ScalingProperties scalingProperties;
+    @Mock
+    private ShardRoutingService shardRoutingService;
 
     @InjectMocks
     private PaymentService paymentService;
@@ -59,6 +74,11 @@ public class PaymentServiceTest {
         when(paymentGatewayClient.createOrder(any(PaymentOrder.class)))
                 .thenReturn(Map.of("externalOrderId", "ext-1", "paymentUrl", "https://pay"));
         when(idempotencyService.acquire(any(), any())).thenReturn(true);
+        when(rateLimiterService.tryConsume(any())).thenReturn(true);
+        when(idGenerator.nextId()).thenReturn(10L);
+        ScalingProperties.Cache cache = new ScalingProperties.Cache();
+        cache.setStatusTtlSeconds(60);
+        when(scalingProperties.getCache()).thenReturn(cache);
         when(paymentOrderRepository.save(any(PaymentOrder.class))).thenAnswer(invocation -> {
             PaymentOrder po = invocation.getArgument(0);
             po.setId(10L);
